@@ -30,10 +30,10 @@ npm run format           # Auto-format code
 npm run test:unit             # Run all unit tests (must pass)
 ```
 
-**Pre-commit checks:**
+**Before opening a pull request:**
 
-- Linting and formatting run automatically via `lint-staged` on commit
-- All tests must pass before pushing to remote
+- Run `npm run validate:quality` locally to check types, lint, formatting, and unit tests.
+- CI runs the quality checks again for pull requests.
 
 ### Testing
 
