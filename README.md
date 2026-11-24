@@ -12,7 +12,7 @@
 
   <br />
 
-[![CI](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/ci.yml/badge.svg)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/ci.yml)
+[![CI](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/unit-tests.yml)
 [![GitHub release](https://img.shields.io/github/v/release/lbenicio/homebridge-tuya-local)](https://github.com/lbenicio/homebridge-tuya-local/releases)
 [![npm version](https://img.shields.io/npm/v/@lbenicio/homebridge-tuya-local)](https://www.npmjs.com/package/@lbenicio/homebridge-tuya-local)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/lbenicio/homebridge-tuya-local/badges/coverage.json)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/ci.yml)
