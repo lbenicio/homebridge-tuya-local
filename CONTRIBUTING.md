@@ -15,9 +15,9 @@ npm install
 ## Development Commands
 
 ```bash
-npm run lint
-npm run format:check
-npm run test
+npm run fmt:lint
+npm run validate:format
+npm run test:unit
 npm run build:tsc
 npm run docs:build
 ```

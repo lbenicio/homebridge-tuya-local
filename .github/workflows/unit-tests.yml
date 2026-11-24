@@ -1,4 +1,4 @@
-name: CI
+name: Unit tests
 
 on:
   push:
@@ -28,8 +28,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run lint
-      - run: npm run format:check
+      - run: npm run validate:format
 
   build:
     name: Build (Node ${{ matrix.node-version }})
@@ -69,7 +68,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run test
+      - run: npm run test:unit
 
   coverage:
     name: Coverage (Node 26)
