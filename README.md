@@ -81,7 +81,11 @@ Add to your Homebridge `config.json`:
 
 ## Matter
 
-On Homebridge 2, enable the Matter protocol for this platform's child bridge in the Homebridge UI. Supported local lights, switches, outlets, temperature/humidity sensors, contact sensors, and wireless switches are then published by the same LAN connection, without Tuya cloud access.
+On Homebridge 2, enable the Matter protocol for this platform's child bridge in the Homebridge UI. The plugin publishes supported Tuya LAN devices through that bridge; it does not require a Tuya cloud connection.
+
+Matter currently supports on/off lights and outlets, dimmable lights, tunable-white lights, multi-outlet strips, multi-switch devices, fans and fan lights, temperature/humidity sensors, contact sensors, and wireless switches. RGB color controls are currently exposed as on/off controls. Device types without a Matter mapping remain available through HomeKit.
+
+Homebridge's Matter implementation is community-provided and is not CSA-certified; controllers may show an uncertified-device warning during pairing. See the [Homebridge Matter documentation](https://github.com/homebridge/homebridge#matter-support).
 
 The existing HomeKit bridge remains available, and device UUIDs are kept stable when switching the package name.
 

@@ -18,7 +18,9 @@ Restart Homebridge after installation.
 
 ## Matter on Homebridge 2
 
-Open the platform's child bridge settings and enable Matter. The plugin publishes supported local devices through the Matter child bridge while retaining the existing HomeKit bridge.
+Open the platform's child bridge settings in Homebridge 2 and enable Matter. The plugin publishes supported Tuya LAN devices through the Matter child bridge while retaining the existing HomeKit bridge. Current mappings include power controls, dimmable and tunable-white lights, multi-outlet strips, multi-switch devices, fans, temperature/humidity sensors, contact sensors, and wireless switches. RGB color controls are exposed as on/off controls; unsupported device types remain available through HomeKit.
+
+Homebridge's Matter implementation is community-provided and is not CSA-certified, so controllers may show an uncertified-device warning during pairing. See the [Homebridge Matter documentation](https://github.com/homebridge/homebridge#matter-support).
 
 ## Verify Installation
 

@@ -114,6 +114,9 @@ class TuyaLocalPlatform {
     this.cachedAccessories = new Map()
     this.deviceInstances = new Map()
     this.matterManager = new MatterAccessoryManager(this.api, this.log)
+    this.matterManager.setExpectedDeviceIds(
+      (this.config?.devices || []).filter((device: TuyaDeviceConfig) => !device.disabled && !this._isHomeKitHidden(device) && MatterAccessoryManager.supportsType(device.type)).map((device: TuyaDeviceConfig) => String(device.id).trim()),
+    )
     this.linkedSwitchManager = new LinkedSwitchManager(this.log)
     this.api.hap.EnergyCharacteristics = EnergyCharacteristicsFactory(this.api.hap.Characteristic)
 
@@ -338,6 +341,10 @@ class TuyaLocalPlatform {
         this.removeAccessory(accessory)
       }, 1000)
     }
+  }
+
+  configureMatterAccessory(accessory: any): void {
+    this.matterManager.configureAccessory(accessory)
   }
 
   addAccessory(device: any): void {
