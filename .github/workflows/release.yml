@@ -30,7 +30,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:tsc
 
       # @semantic-release/npm uses the npm CLI pinned in package-lock.json for OIDC publishing.
       # No NPM_TOKEN. Publishing authenticates via OIDC against the trusted

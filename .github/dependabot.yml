@@ -7,7 +7,7 @@ updates:
     schedule:
       interval: weekly
       day: tuesday
-      time: "09:00"
+      time: '09:00'
       timezone: UTC
     open-pull-requests-limit: 10
     versioning-strategy: increase-if-necessary
@@ -36,7 +36,7 @@ updates:
     schedule:
       interval: weekly
       day: tuesday
-      time: "09:00"
+      time: '09:00'
       timezone: UTC
     open-pull-requests-limit: 5
     labels:

@@ -15,7 +15,7 @@ npm install
 ### Build & Watch
 
 ```bash
-npm run build   # Compile TypeScript to dist/
+npm run build:tsc   # Compile TypeScript to dist/
 npm run dev     # Watch mode (rebuilds on file changes)
 ```
 
@@ -93,7 +93,7 @@ Review major upgrades separately. For example, TypeScript 7 is not yet in the su
 
 6. **Verify the build:**
    ```bash
-   npm run lint && npm test && npm run build
+   npm run lint && npm test && npm run build:tsc
    ```
 
 ## Commit Message Format
@@ -162,7 +162,7 @@ BREAKING CHANGE: dpPower now requires string instead of number
 3. Ensure all checks pass:
 
    ```bash
-   npm run lint && npm test && npm run build
+   npm run lint && npm test && npm run build:tsc
    ```
 
 4. Commit using conventional commit format

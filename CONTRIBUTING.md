@@ -18,7 +18,7 @@ npm install
 npm run lint
 npm run format:check
 npm run test
-npm run build
+npm run build:tsc
 npm run docs:build
 ```
 

@@ -17,7 +17,7 @@ List commands you ran and results:
 - [ ] `npm run lint`
 - [ ] `npm run format:check`
 - [ ] `npm test`
-- [ ] `npm run build`
+- [ ] `npm run build:tsc`
 - [ ] `npm run docs:build` (if docs changed)
 
 ## Documentation
