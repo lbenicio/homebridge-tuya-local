@@ -1,0 +1,391 @@
+import TuyaAccessory from './protocol/TuyaAccessory'
+import TuyaDiscovery from './protocol/TuyaDiscovery'
+import MatterAccessoryManager from './MatterAccessoryManager'
+import LinkedSwitchManager from './LinkedSwitchManager'
+
+import {
+  EnergyCharacteristicsFactory,
+  OutletAccessory,
+  SimpleLightAccessory,
+  MultiOutletAccessory,
+  CustomMultiOutletAccessory,
+  RGBTWLightAccessory,
+  RGBTWOutletAccessory,
+  TWLightAccessory,
+  AirConditionerAccessory,
+  AirPurifierAccessory,
+  DehumidifierAccessory,
+  ConvectorAccessory,
+  GarageDoorAccessory,
+  SimpleDimmerAccessory,
+  SimpleDimmer2Accessory,
+  SimpleBlindsAccessory,
+  SimpleHeaterAccessory,
+  MappedHeatPumpHeaterAccessory,
+  CircuitBreakerMonitorAccessory,
+  SimpleFanAccessory,
+  SimpleFanLightAccessory,
+  SwitchAccessory,
+  ValveAccessory,
+  OilDiffuserAccessory,
+  TemperatureHumiditySensorAccessory,
+  ContactSensorAccessory,
+  InfraredHubAccessory,
+  WirelessSwitchAccessory,
+  GatewayAccessory,
+} from './accessories'
+
+import type { ClassDefMap, TuyaDeviceConfig, TuyaPlatformConfig } from './types'
+
+const PLUGIN_NAME = '@lbenicio/homebridge-tuya-local'
+const UUID_NAMESPACE = 'homebridge-tuya-local'
+const PLATFORM_NAME = 'TuyaLocalPlatform'
+
+const CLASS_DEF: ClassDefMap = {
+  outlet: OutletAccessory,
+  simplelight: SimpleLightAccessory,
+  rgbtwlight: RGBTWLightAccessory,
+  rgbtwoutlet: RGBTWOutletAccessory,
+  twlight: TWLightAccessory,
+  multioutlet: MultiOutletAccessory,
+  custommultioutlet: CustomMultiOutletAccessory,
+  airconditioner: AirConditionerAccessory,
+  airpurifier: AirPurifierAccessory,
+  dehumidifier: DehumidifierAccessory,
+  convector: ConvectorAccessory,
+  garagedoor: GarageDoorAccessory,
+  simpledimmer: SimpleDimmerAccessory,
+  simpledimmer2: SimpleDimmer2Accessory,
+  simpleblinds: SimpleBlindsAccessory,
+  simpleheater: SimpleHeaterAccessory,
+  mappedheatpumpheater: MappedHeatPumpHeaterAccessory,
+  circuitbreakermonitor: CircuitBreakerMonitorAccessory,
+  switch: SwitchAccessory,
+  fan: SimpleFanAccessory,
+  fanlight: SimpleFanLightAccessory,
+  watervalve: ValveAccessory,
+  oildiffuser: OilDiffuserAccessory,
+  temperaturehumiditysensor: TemperatureHumiditySensorAccessory,
+  temperaturehumidity: TemperatureHumiditySensorAccessory,
+  thermometer: TemperatureHumiditySensorAccessory,
+  contactsensor: ContactSensorAccessory,
+  doorsensor: ContactSensorAccessory,
+  infraredhub: InfraredHubAccessory,
+  ircontrolhub: InfraredHubAccessory,
+  rfhub: InfraredHubAccessory,
+  wirelessswitch: WirelessSwitchAccessory,
+  gateway: GatewayAccessory,
+  zigbeegateway: GatewayAccessory,
+}
+
+let Characteristic: any, PlatformAccessory: any, Service: any, Categories: any, Perms: any, UUID: any
+
+module.exports = function (homebridge: any): void {
+  ;({
+    platformAccessory: PlatformAccessory,
+    hap: {
+      Characteristic,
+      Service,
+      // Homebridge 2.x / modern hap-nodejs exports Categories on hap itself.
+      // Accessory.Categories is undefined there and crashes addAccessory with:
+      //   TypeError: Cannot read properties of undefined (reading 'FAN')
+      Categories,
+      Perms,
+      uuid: UUID,
+    },
+  } = homebridge)
+
+  homebridge.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, TuyaLocalPlatform, true)
+}
+
+class TuyaLocalPlatform {
+  log: any
+  config: TuyaPlatformConfig
+  api: any
+  matterManager: MatterAccessoryManager
+  linkedSwitchManager: LinkedSwitchManager
+  cachedAccessories: Map<string, any>
+  deviceInstances: Map<string, TuyaAccessory>
+  _expectedUUIDs?: string[]
+
+  constructor(...props: any[]) {
+    ;[this.log, this.config, this.api] = [...props]
+
+    this.cachedAccessories = new Map()
+    this.deviceInstances = new Map()
+    this.matterManager = new MatterAccessoryManager(this.api, this.log)
+    this.linkedSwitchManager = new LinkedSwitchManager(this.log)
+    this.api.hap.EnergyCharacteristics = EnergyCharacteristicsFactory(this.api.hap.Characteristic)
+
+    if (!this.config || !this.config.devices) {
+      this.log('No devices found. Check that you have specified them in your config.json file.')
+      return
+    }
+
+    // A disabled device is deliberately left out of the expected set, so its cached
+    // accessory is dropped by configureAccessory instead of lingering in HomeKit as an
+    // unresponsive tile.
+    this._expectedUUIDs = this.config.devices
+      .filter((device: TuyaDeviceConfig) => !device.disabled && !this._isHomeKitHidden(device))
+      .map((device: TuyaDeviceConfig) => UUID.generate(UUID_NAMESPACE + (device.fake ? ':fake:' : ':') + device.id))
+
+    this.api.on('didFinishLaunching', () => {
+      this.discoverDevices()
+    })
+  }
+
+  discoverDevices(): void {
+    const devices: Record<string, TuyaDeviceConfig & { name: string }> = {}
+    const connectedDevices: string[] = []
+    const fakeDevices: (TuyaDeviceConfig & { name: string })[] = []
+
+    this.config.devices.forEach((device: TuyaDeviceConfig) => {
+      try {
+        device.id = ('' + device.id).trim()
+        device.key = ('' + device.key).trim()
+        device.type = ('' + device.type).trim()
+        device.ip = ('' + (device.ip || '')).trim()
+      } catch (_ex) {
+        /* ignore */
+      }
+
+      if (device.disabled) return this.log.info('Skipping disabled device %s (%s).', device.name || 'Unnamed device', device.id)
+
+      if (!device.type) return this.log.error("%s (%s) doesn't have a type defined.", device.name || 'Unnamed device', device.id)
+      if (!CLASS_DEF[device.type.toLowerCase()]) return this.log.error("%s (%s) doesn't have a valid type defined.", device.name || 'Unnamed device', device.id)
+
+      if (device.fake) fakeDevices.push({ name: device.id.slice(8), ...device })
+      else devices[device.id] = { name: device.id.slice(8), ...device }
+    })
+
+    const deviceIds = Object.keys(devices)
+    if (deviceIds.length === 0) {
+      if (this.config.devices.some((device: TuyaDeviceConfig) => device.disabled) && fakeDevices.length === 0) return this.log.info('All configured devices are disabled.')
+
+      return this.log.error('No valid configured devices found.')
+    }
+
+    // A device configured with both an IP and a protocol version has nothing left to
+    // learn from UDP discovery, so it connects straight away instead of waiting out the
+    // discovery window. This is what makes routed setups work: discovery relies on UDP
+    // broadcasts, and those do not cross subnets, so a device on a separate IoT VLAN can
+    // never be discovered no matter how long we wait for it.
+    //
+    // A device with an IP but no version still goes through discovery, because discovery
+    // is where the version is learned. Guessing is worse than waiting here: the fallback
+    // is 3.1, and speaking 3.1 to a 3.3 device fails without saying why.
+    const directIds = deviceIds.filter((deviceId) => devices[deviceId].ip && devices[deviceId].version)
+    const cachedOnlyIds = deviceIds.filter((deviceId) => {
+      const config = devices[deviceId]
+      return !config.ip && !config.parentId && !config.gatewayId && config.useCachedState === true && config.initialState && Object.keys(config.initialState).length > 0
+    })
+    const orderedDirectIds: string[] = []
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+    const addInParentOrder = (deviceId: string): void => {
+      if (visited.has(deviceId) || visiting.has(deviceId)) return
+      visiting.add(deviceId)
+      const parentId = devices[deviceId].parentId || devices[deviceId].gatewayId
+      if (parentId && devices[parentId]) addInParentOrder(parentId)
+      visiting.delete(deviceId)
+      visited.add(deviceId)
+      orderedDirectIds.push(deviceId)
+    }
+    directIds.forEach(addInParentOrder)
+    const discoveryIds = deviceIds.filter((deviceId) => !directIds.includes(deviceId) && !cachedOnlyIds.includes(deviceId))
+
+    orderedDirectIds.forEach((deviceId) => {
+      connectedDevices.push(deviceId)
+
+      this.log.info('Connecting directly to %s (%s) via %s.', devices[deviceId].name, deviceId, devices[deviceId].ip)
+
+      this.addDeviceAccessory(devices[deviceId], deviceId)
+    })
+
+    this.linkedSwitchManager.bind(this.config.linkedSwitchGroups, this.deviceInstances)
+
+    cachedOnlyIds.forEach((deviceId) => {
+      connectedDevices.push(deviceId)
+      this.log.info('Adding cached-only device %s (%s).', devices[deviceId].name, deviceId)
+      this.addDeviceAccessory({ ...devices[deviceId], fake: true }, deviceId, 'cached accessory')
+    })
+
+    if (discoveryIds.length > 0) {
+      this.log.info('Starting discovery...')
+
+      TuyaDiscovery.start({ ids: discoveryIds, log: this.log }).on('discover', (config: any) => {
+        if (!config || !config.id) return
+        if (!devices[config.id]) return this.log.warn('Discovered a device that has not been configured yet (%s@%s).', config.id, config.ip)
+        if (devices[config.id].ip && devices[config.id].ip !== config.ip) {
+          return this.log.warn('Ignoring discovery for %s from an unexpected address (%s).', config.id, config.ip)
+        }
+
+        connectedDevices.push(config.id)
+
+        this.log.info('Discovered %s (%s) identified as %s (%s)', devices[config.id].name, config.id, devices[config.id].type, config.version)
+
+        this.addDeviceAccessory(
+          {
+            ...devices[config.id],
+            ip: config.ip,
+            // UDP discovery is unauthenticated, so it may supply a version only
+            // when the administrator did not configure one explicitly.
+            ...(!devices[config.id].version && config.version ? { version: config.version } : {}),
+          },
+          config.id,
+          'discovered accessory',
+        )
+        this.linkedSwitchManager.bind(this.config.linkedSwitchGroups, this.deviceInstances)
+      })
+    }
+
+    fakeDevices.forEach((config) => {
+      this.log.info('Adding fake device: %s', config.name)
+      this.addAccessory(
+        new TuyaAccessory({
+          ...config,
+          log: this.log,
+          UUID: UUID.generate(UUID_NAMESPACE + ':fake:' + config.id),
+          connect: false,
+        }),
+      )
+    })
+
+    // Nothing is waiting on discovery, so there is no window to time out.
+    if (discoveryIds.length === 0) return
+
+    setTimeout(() => {
+      discoveryIds.forEach((deviceId) => {
+        if (connectedDevices.includes(deviceId)) return
+
+        if (devices[deviceId].ip) {
+          this.log.info('Failed to discover %s (%s) in time but will connect via %s.', devices[deviceId].name, deviceId, devices[deviceId].ip)
+
+          this.addDeviceAccessory(devices[deviceId], deviceId)
+          this.linkedSwitchManager.bind(this.config.linkedSwitchGroups, this.deviceInstances)
+        } else {
+          this.log.warn('Failed to discover %s (%s) in time but will keep looking.', devices[deviceId].name, deviceId)
+        }
+      })
+    }, 60000)
+  }
+
+  addDeviceAccessory(config: TuyaDeviceConfig & { name: string }, deviceId: string, label: string = 'accessory'): void {
+    try {
+      const parentId = config.parentId || config.gatewayId
+      const parent = parentId ? this.deviceInstances.get(parentId) : undefined
+      if (parentId && !parent) {
+        this.log.warn('Parent gateway %s for %s is not configured or has not started yet.', parentId, deviceId)
+      }
+      const device = new TuyaAccessory({
+        ...config,
+        key: config.key || parent?.context.key,
+        ip: config.ip || parent?.context.ip,
+        version: config.version || parent?.context.version,
+        parent,
+        log: this.log,
+        UUID: UUID.generate(UUID_NAMESPACE + ':' + deviceId),
+        connect: false,
+      })
+      this.deviceInstances.set(deviceId, device)
+      if (this._isHomeKitHidden(config)) {
+        this.log.info('Keeping %s connected for child devices without publishing it to HomeKit.', config.name)
+        device._connect()
+        return
+      }
+      this.addAccessory(device)
+      this.matterManager.add(device)
+    } catch (err: any) {
+      this.log.error('Failed to add %s %s (%s): %s', label, config.name, deviceId, err && err.stack ? err.stack : err)
+    }
+  }
+
+  private _isHomeKitHidden(device: TuyaDeviceConfig): boolean {
+    const type = String(device.type || '')
+      .trim()
+      .toLowerCase()
+    return type === 'gateway' || type === 'zigbeegateway'
+  }
+
+  registerPlatformAccessories(platformAccessories: any | any[]): void {
+    this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, Array.isArray(platformAccessories) ? platformAccessories : [platformAccessories])
+  }
+
+  configureAccessory(accessory: any): void {
+    if (accessory instanceof PlatformAccessory && this._expectedUUIDs && this._expectedUUIDs.includes(accessory.UUID)) {
+      this.cachedAccessories.set(accessory.UUID, accessory)
+      const writePermission = Perms?.WRITE || Characteristic?.Perms?.WRITE
+      const notifyPermission = Perms?.NOTIFY || Characteristic?.Perms?.NOTIFY
+      accessory.services.forEach((service: any) => {
+        if (service.UUID === Service.AccessoryInformation.UUID) return
+        service.characteristics.some((characteristic: any) => {
+          if (
+            !characteristic.props ||
+            !Array.isArray(characteristic.props.perms) ||
+            characteristic.props.perms.length !== 3 ||
+            !(characteristic.props.perms.includes(writePermission) && characteristic.props.perms.includes(notifyPermission))
+          )
+            return
+
+          this.log.info('Marked %s unreachable by faulting Service.%s.%s', accessory.displayName, service.displayName, characteristic.displayName)
+
+          characteristic.updateValue(new Error('Unreachable'))
+          return true
+        })
+      })
+    } else {
+      setTimeout(() => {
+        this.removeAccessory(accessory)
+      }, 1000)
+    }
+  }
+
+  addAccessory(device: any): void {
+    const deviceConfig = device.context
+    const type = (deviceConfig.type || '').toLowerCase()
+
+    const Accessory = CLASS_DEF[type]
+
+    let accessory = this.cachedAccessories.get(deviceConfig.UUID)
+    let isCached = true
+
+    if (accessory && accessory.category !== Accessory.getCategory(Categories)) {
+      this.log.info('%s has a different type (%s vs %s)', accessory.displayName, accessory.category, Accessory.getCategory(Categories))
+      this.removeAccessory(accessory)
+      accessory = null
+    }
+
+    if (!accessory) {
+      accessory = new PlatformAccessory(deviceConfig.name, deviceConfig.UUID, Accessory.getCategory(Categories))
+      accessory
+        .getService(Service.AccessoryInformation)
+        .setCharacteristic(Characteristic.Manufacturer, deviceConfig.manufacturer || 'Unknown')
+        .setCharacteristic(Characteristic.Model, deviceConfig.model || 'Unknown')
+        .setCharacteristic(Characteristic.SerialNumber, deviceConfig.id.slice(8))
+
+      isCached = false
+    }
+
+    if (accessory && accessory.displayName !== deviceConfig.name) {
+      this.log.info('Configuration name %s differs from cached displayName %s. Updating cached displayName to %s ', deviceConfig.name, accessory.displayName, deviceConfig.name)
+      accessory.displayName = deviceConfig.name
+    }
+
+    this.cachedAccessories.set(deviceConfig.UUID, new Accessory(this, accessory, device, !isCached))
+  }
+
+  removeAccessory(homebridgeAccessory: any): void {
+    if (!homebridgeAccessory) return
+
+    this.log.warn('Unregistering', homebridgeAccessory.displayName)
+
+    this.cachedAccessories.delete(homebridgeAccessory.UUID)
+    const deviceId = [...this.deviceInstances.entries()].find(([, device]) => device.context.UUID === homebridgeAccessory.UUID)?.[0]
+    if (deviceId) this.matterManager.remove(deviceId)
+    this.api.unregisterPlatformAccessories(PLATFORM_NAME, PLATFORM_NAME, [homebridgeAccessory])
+  }
+
+  removeAccessoryByUUID(uuid: string): void {
+    if (uuid) this.removeAccessory(this.cachedAccessories.get(uuid))
+  }
+}

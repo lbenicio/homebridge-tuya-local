@@ -1,0 +1,130 @@
+{
+  "name": "@lbenicio/homebridge-tuya-local",
+  "version": "2.0.0",
+  "description": "Homebridge plugin to control Tuya devices locally over LAN",
+  "author": "Leonardo Benicio <hi@lbenicio.dev>",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "start:dev": "tsc --watch",
+    "build:tsc": "tsc",
+    "fs:clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "fmt:lint": "eslint --fix src/ tests/",
+    "fmt:format": "prettier --write .",
+    "validate:lint": "eslint src/ tests/",
+    "validate:format": "prettier --check .",
+    "validate:type": "tsc --noEmit",
+    "validate:deps": "npm-check-updates",
+    "validate:quality": "npm run validate:type && npm run validate:lint && npm run validate:format && npm run test:unit",
+    "deps:install": "npm install --verbose --no-fund",
+    "deps:update": "npm-check-updates -u && npm run deps:install",
+    "prepare": "npm run build:tsc && simple-git-hooks",
+    "prebuild": "npm run clean",
+    "prepublishOnly": "npm run build:tsc"
+  },
+  "dependencies": {
+    "async": "^3.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/git": "^11.0.1",
+    "@types/async": "^3.2.26",
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.1.1",
+    "@vitest/ui": "^5.1.1",
+    "eslint": "^10.15.0",
+    "eslint-config-prettier": "^10.1.8",
+    "homebridge": "^2.5.0",
+    "lint-staged": "^17.6.2",
+    "npm-check-updates": "^23.1.1",
+    "prettier": "^3.10.1",
+    "semantic-release": "^26.0.1",
+    "simple-git-hooks": "^2.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.74.0",
+    "vitepress": "^1.6.4",
+    "vitest": "^5.1.1"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "npx lint-staged && npm run validate:quality",
+    "pre-push": "npm run validate:quality"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "tests/**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "**/*.{json,md,mts,mjs}": "prettier --write"
+  },
+  "engines": {
+    "homebridge": ">=1.6.0",
+    "node": ">=26.0.0",
+    "npm": ">=11.20.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "release": {
+    "branches": [
+      "main"
+    ],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/changelog",
+      "@semantic-release/npm",
+      "@semantic-release/github",
+      [
+        "@semantic-release/git",
+        {
+          "assets": [
+            "package.json",
+            "CHANGELOG.md"
+          ],
+          "message": "chore(release): ${nextRelease.version} [skip ci]"
+        }
+      ]
+    ]
+  },
+  "homepage": "https://github.com/lbenicio/homebridge-tuya-local#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lbenicio/homebridge-tuya-local.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lbenicio/homebridge-tuya-local/issues"
+  },
+  "files": [
+    "dist",
+    "config.schema.json",
+    "README.md",
+    "LICENSE.txt"
+  ],
+  "keywords": [
+    "homebridge-plugin",
+    "homebridge",
+    "homebridge-tuya-local",
+    "tuya",
+    "tuya-lan",
+    "local",
+    "supports-hap",
+    "supports-matter"
+  ],
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true,
+    "simple-git-hooks@2.14.0": true
+  }
+}

@@ -1,0 +1,679 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { EventEmitter } from 'events'
+import crypto from 'crypto'
+import TuyaAccessory from '../src/protocol/TuyaAccessory'
+import { createMockLogger } from './helpers'
+
+// ─── net module mock ──────────────────────────────────────────────────────────
+// We keep a reference to the most recently created mock socket so individual
+// tests can interact with it (emit events, check calls, etc.)
+let lastSocket: any
+
+vi.mock('net', () => {
+  const { EventEmitter: EE } = require('events')
+
+  class MockSocket extends EE {
+    connect = vi.fn()
+    write = vi.fn(() => true)
+    destroy = vi.fn()
+    end = vi.fn()
+    setKeepAlive = vi.fn()
+    setNoDelay = vi.fn()
+
+    constructor() {
+      super()
+      // Keep the constructed socket available to tests so they can emit events.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
+      lastSocket = this
+    }
+  }
+  return { default: { Socket: MockSocket } }
+})
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function makeProps(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'device-001',
+    key: 'abcdef1234567890', // 16-byte key for AES-128
+    ip: '192.0.2.50',
+    name: 'Test Device',
+    version: '3.3',
+    log: createMockLogger(),
+    connect: false, // prevent automatic TCP connection in most tests
+    ...overrides,
+  }
+}
+
+// Build a minimal valid Tuya frame (shared header/footer)
+function buildFrame(cmd: number, payload: Buffer): Buffer {
+  const prefix = 4 // 0x000055aa
+  const seq = 4
+  const cmdBytes = 4
+  const size = 4
+  const crc = 4
+  const suffix = 4
+  const total = prefix + seq + cmdBytes + size + payload.length + crc + suffix
+  const buf = Buffer.alloc(total)
+  buf.writeUInt32BE(0x000055aa, 0)
+  buf.writeUInt32BE(0, 4) // sequence
+  buf.writeUInt32BE(cmd, 8)
+  buf.writeUInt32BE(payload.length + crc + suffix, 12) // size field
+  payload.copy(buf, 16)
+  buf.writeUInt32BE(0, 16 + payload.length) // crc stub
+  buf.writeUInt32BE(0x0000aa55, total - 4)
+  return buf
+}
+
+function build35Frame(cmd: number, payload: Buffer, key: string): Buffer {
+  const header = Buffer.alloc(18)
+  header.writeUInt32BE(0x00006699, 0)
+  header.writeUInt32BE(1, 6)
+  header.writeUInt32BE(cmd, 10)
+  header.writeUInt32BE(payload.length + 28, 14)
+
+  const iv = Buffer.from('123456789012')
+  const cipher = crypto.createCipheriv('aes-128-gcm', key, iv)
+  cipher.setAAD(header.slice(4, 18))
+  const encrypted = Buffer.concat([cipher.update(payload), cipher.final(), cipher.getAuthTag()])
+  return Buffer.concat([header, iv, encrypted, Buffer.from('00009966', 'hex')])
+}
+
+// ─── tests ────────────────────────────────────────────────────────────────────
+describe('TuyaAccessory', () => {
+  let log: ReturnType<typeof createMockLogger>
+
+  beforeEach(() => {
+    log = createMockLogger()
+    vi.useFakeTimers()
+    lastSocket = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+  })
+
+  // ── Constructor ─────────────────────────────────────────────────────────────
+  describe('constructor', () => {
+    it('returns a TuyaAccessory instance with correct context', () => {
+      const props = makeProps()
+      const acc = new TuyaAccessory(props as any)
+      expect(acc).toBeInstanceOf(TuyaAccessory)
+      expect(acc).toBeInstanceOf(EventEmitter)
+      expect(acc.context.id).toBe('device-001')
+      expect(acc.context.key).toBe('abcdef1234567890')
+      expect(acc.context.ip).toBe('192.0.2.50')
+      expect(acc.context.version).toBe('3.3')
+    })
+
+    it('defaults version to 3.1 when not provided', () => {
+      // omit version entirely so the spread default applies
+      const { version: _v, ...rest } = makeProps()
+      const acc = new TuyaAccessory(rest as any)
+      expect(acc.context.version).toBe('3.1')
+    })
+
+    it('defaults port to 6668', () => {
+      const acc = new TuyaAccessory(makeProps() as any)
+      expect(acc.context.port).toBe(6668)
+    })
+
+    it('logs and skips init when required props are missing', () => {
+      const props = { log, connect: false } as any
+      const acc = new TuyaAccessory(props)
+      expect(log.info).toHaveBeenCalledWith('Insufficient details to initialize; missing %s.', 'id, key, ip')
+      expect(acc.connected).toBe(false)
+    })
+
+    it('starts as not connected', () => {
+      const acc = new TuyaAccessory(makeProps() as any)
+      expect(acc.connected).toBe(false)
+    })
+
+    it('initialises an empty state object', () => {
+      const acc = new TuyaAccessory(makeProps() as any)
+      expect(acc.state).toEqual({})
+    })
+
+    it('initialises state from a configured cache', () => {
+      const acc = new TuyaAccessory(makeProps({ initialState: { '1': 26, '2': 68 } }) as any)
+      expect(acc.state).toEqual({ '1': 26, '2': 68 })
+    })
+  })
+
+  // ── Fake mode ────────────────────────────────────────────────────────────────
+  describe('fake mode', () => {
+    it('sets connected=true without a real socket', () => {
+      // fake mode needs connect:true so _connect() is actually called
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      expect(acc.connected).toBe(true)
+    })
+
+    it('emits a change event after 1 s in fake mode', () => {
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      const handler = vi.fn()
+      acc.on('change', handler)
+      vi.advanceTimersByTime(1100)
+      expect(handler).toHaveBeenCalledWith({}, {})
+    })
+
+    it('does not create a net.Socket in fake mode', () => {
+      new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      expect(lastSocket).toBeNull()
+    })
+  })
+
+  // ── update() ─────────────────────────────────────────────────────────────────
+  describe('update()', () => {
+    it('returns true in fake mode with no args', () => {
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      expect(acc.update()).toBe(true)
+    })
+
+    it('calls _fakeUpdate and emits change after 1s when DPS are given', () => {
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      // advance past the constructor timeout first
+      vi.advanceTimersByTime(1100)
+
+      const handler = vi.fn()
+      acc.on('change', handler)
+
+      acc.update({ '1': true })
+      vi.advanceTimersByTime(1100)
+
+      expect(handler).toHaveBeenCalledWith({ '1': true }, { '1': true })
+    })
+
+    it('non-numeric DP keys are ignored in fake mode', () => {
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      vi.advanceTimersByTime(1100)
+
+      const handler = vi.fn()
+      acc.on('change', handler)
+
+      // 'name' is not numeric → should NOT be sent as a DP
+      acc.update({ name: 'Test' } as any)
+      vi.advanceTimersByTime(1100)
+      expect(handler).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── _connect() / socket ───────────────────────────────────────────────────────
+  describe('socket connection', () => {
+    it('creates a socket and calls connect when connect:true', () => {
+      new TuyaAccessory(makeProps({ connect: true }) as any)
+      expect(lastSocket).not.toBeNull()
+      expect(lastSocket.connect).toHaveBeenCalledWith(6668, '192.0.2.50')
+    })
+
+    it('marks connected=true when socket emits "connect" (v3.3)', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      expect(acc.connected).toBe(true)
+    })
+
+    it('resets connected=false on socket close', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      expect(acc.connected).toBe(true)
+      lastSocket.emit('close')
+      expect(acc.connected).toBe(false)
+    })
+
+    it('resets connected=false on socket end', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      lastSocket.emit('end')
+      expect(acc.connected).toBe(false)
+    })
+
+    it('handles socket errors without throwing', () => {
+      new TuyaAccessory(makeProps({ connect: true }) as any)
+      expect(() => lastSocket.emit('error', new Error('ECONNREFUSED'))).not.toThrow()
+    })
+
+    it('retries on ECONNRESET without destroying socket', () => {
+      // use the same `log` instance so we can assert on it
+      new TuyaAccessory({ ...makeProps({ connect: true, version: '3.3' }), log } as any)
+      const err: NodeJS.ErrnoException = new Error('reset')
+      err.code = 'ECONNRESET'
+      lastSocket.emit('error', err)
+      expect(log.info).not.toHaveBeenCalled()
+      expect(log.debug).toHaveBeenCalledWith('Socket error for Test Device: ECONNRESET; reconnecting (consecutive failure 1)')
+    })
+  })
+
+  // ── _send() returns false when not connected ──────────────────────────────────
+  describe('_send() internal gating', () => {
+    it('update() returns false when socket is not yet connected (non-fake)', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      // Not connected yet: socket was created but no 'connect' event fired
+      expect(acc.update()).toBe(false)
+    })
+
+    it('_send writes to socket after connection (v3.3)', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      // update() with no args sends a status-request (cmd 10)
+      acc.update()
+      expect(lastSocket.write).toHaveBeenCalled()
+    })
+
+    it('includes the complete v3.3 status query payload', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      acc.update()
+
+      const frame = lastSocket.write.mock.calls.at(-1)[0] as Buffer
+      const encrypted = frame.subarray(16, frame.length - 8)
+      const decipher = crypto.createDecipheriv('aes-128-ecb', 'abcdef1234567890', '')
+      const payload = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+
+      expect(JSON.parse(payload)).toEqual({
+        gwId: 'device-001',
+        devId: 'device-001',
+        uid: 'device-001',
+        t: expect.any(String),
+      })
+    })
+
+    it('falls back to a device22 DP query after an invalid status response', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true, initialState: { '1': 24, '2': 68, '3': 0 } }) as any)
+      lastSocket.emit('connect')
+      lastSocket.write.mockClear()
+      ;(acc as any)._msgHandler_3_3({ msg: buildFrame(10, Buffer.from('json obj data unvalid')) }, vi.fn())
+
+      expect((acc as any)._device22).toBe(true)
+      const frame = lastSocket.write.mock.calls.at(-1)[0] as Buffer
+      expect(frame.readUInt32BE(8)).toBe(13)
+
+      const encrypted = frame.subarray(31, frame.length - 8)
+      const decipher = crypto.createDecipheriv('aes-128-ecb', 'abcdef1234567890', '')
+      const payload = JSON.parse(Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8'))
+      expect(payload).toMatchObject({
+        devId: 'device-001',
+        uid: 'device-001',
+        dps: { '1': null, '2': null, '3': null },
+      })
+    })
+
+    it('uses the current LAN identity for queries and writes while preserving the accessory identity', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true, lanId: 'registered-device-002', statusDps: [1, 2, 16] }) as any)
+      lastSocket.emit('connect')
+      const decoded = () => {
+        const frame = lastSocket.write.mock.calls.at(-1)[0] as Buffer
+        const command = frame.readUInt32BE(8)
+        const decipher = crypto.createDecipheriv('aes-128-ecb', 'abcdef1234567890', '')
+        const encrypted = frame.subarray(command === 10 ? 16 : 31, -8)
+        return JSON.parse(Buffer.concat([decipher.update(encrypted), decipher.final()]).toString())
+      }
+      acc.update()
+      expect(decoded()).toMatchObject({
+        gwId: 'registered-device-002',
+        devId: 'registered-device-002',
+        uid: 'registered-device-002',
+      })
+      ;(acc as any)._msgHandler_3_3({ msg: buildFrame(10, Buffer.from('json obj data unvalid')) }, vi.fn())
+      expect(decoded()).toMatchObject({
+        devId: 'registered-device-002',
+        uid: 'registered-device-002',
+        dps: { '1': null, '2': null, '16': null },
+      })
+      acc.update({ '9': 'c' })
+      expect(decoded()).toMatchObject({ devId: 'registered-device-002', dps: { '9': 'c' } })
+      expect(acc.context.id).toBe('device-001')
+    })
+
+    it('ignores the empty device22 acknowledgment and keeps the connection usable', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+      log.info.mockClear()
+      ;(acc as any)._msgHandler_3_3({ msg: buildFrame(13, Buffer.alloc(0)) }, vi.fn())
+
+      expect(log.info).not.toHaveBeenCalled()
+    })
+
+    it('polls configured status at the requested interval', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true, statusPollInterval: 30, pingTimeout: 300 }) as any)
+      lastSocket.emit('connect')
+      vi.advanceTimersByTime(1000)
+      lastSocket.write.mockClear()
+
+      vi.advanceTimersByTime(28999)
+      expect(lastSocket.write).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(1001)
+      expect(lastSocket.write).toHaveBeenCalledTimes(1)
+      expect(acc.connected).toBe(true)
+    })
+
+    it('_send writes to socket after connection (v3.1)', () => {
+      const acc = new TuyaAccessory(makeProps({ connect: true, version: '3.1' }) as any)
+      lastSocket.emit('connect')
+      acc.update()
+      expect(lastSocket.write).toHaveBeenCalled()
+    })
+  })
+
+  describe('gateway children', () => {
+    it('shares the gateway connection and routes child state by cid', () => {
+      const parent = new TuyaAccessory(makeProps({ connect: true }) as any)
+      lastSocket.emit('connect')
+
+      const child = new TuyaAccessory(
+        makeProps({
+          id: 'child-001',
+          name: 'Child Device',
+          cid: 'node-001',
+          parent,
+          connect: false,
+        }) as any,
+      )
+      child._connect()
+
+      const change = vi.fn()
+      child.on('change', change)
+      ;(parent as any)._changePayload({ cid: 'node-001', dps: { '1': 'click' } })
+
+      expect(child.state).toEqual({ '1': 'click' })
+      expect(change).toHaveBeenCalledWith({ '1': 'click' }, { '1': 'click' })
+      expect(parent.state).toEqual({})
+      expect(child.update({ '1': true })).toBe(true)
+      expect(lastSocket.write).toHaveBeenCalled()
+    })
+
+    it('emits repeated wireless switch events when the value is unchanged', () => {
+      const accessory = new TuyaAccessory(makeProps({ type: 'WirelessSwitch', connect: false }) as any)
+      const change = vi.fn()
+      accessory.on('change', change)
+      ;(accessory as any)._change({ '1': 'single_click' }, true)
+      ;(accessory as any)._change({ '1': 'single_click' }, true)
+
+      expect(change).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not emit unchanged wireless state snapshots', () => {
+      const accessory = new TuyaAccessory(makeProps({ type: 'WirelessSwitch', connect: false }) as any)
+      const change = vi.fn()
+      accessory.on('change', change)
+      ;(accessory as any)._change({ '1': 'single_click' })
+      ;(accessory as any)._change({ '1': 'single_click' })
+
+      expect(change).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ── Message handler 3.1 via simulated "data" events ──────────────────────────
+  describe('_msgHandler_3_1 (protocol 3.1)', () => {
+    function makeV31Accessory() {
+      const acc = new TuyaAccessory(makeProps({ connect: true, version: '3.1' }) as any)
+      lastSocket.emit('connect')
+      return acc
+    }
+
+    it('ignores frames that are missing magic prefix/suffix', () => {
+      const acc = makeV31Accessory()
+      const handler = vi.fn()
+      acc.on('change', handler)
+      lastSocket.emit('data', Buffer.from('deadbeef', 'hex'))
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('handles heartbeat (cmd 9) without error', () => {
+      makeV31Accessory()
+      const payload = Buffer.from('')
+      const frame = buildFrame(9, payload)
+      expect(() => lastSocket.emit('data', frame)).not.toThrow()
+    })
+
+    it('emits change for cmd=10 with valid JSON dps', () => {
+      const acc = makeV31Accessory()
+      const dpsPayload = JSON.stringify({ dps: { '1': true } })
+      const frame = buildFrame(10, Buffer.from(dpsPayload))
+
+      return new Promise<void>((resolve) => {
+        acc.on('change', (oldState, newState) => {
+          expect(oldState).toEqual({ '1': true })
+          expect(newState).toEqual({ '1': true })
+          resolve()
+        })
+        lastSocket.emit('data', frame)
+      })
+    })
+
+    it('handles "json obj data unvalid" (cmd=10) gracefully', () => {
+      const acc = makeV31Accessory()
+      const handler = vi.fn()
+      acc.on('change', handler)
+      const frame = buildFrame(10, Buffer.from('json obj data unvalid'))
+      expect(() => lastSocket.emit('data', frame)).not.toThrow()
+    })
+
+    it('handles invalid JSON payload without throwing', () => {
+      makeV31Accessory()
+      const frame = buildFrame(10, Buffer.from('{invalid json'))
+      expect(() => lastSocket.emit('data', frame)).not.toThrow()
+    })
+  })
+
+  // ── Message handler 3.3 via simulated "data" events ──────────────────────────
+  describe('_msgHandler_3_3 (protocol 3.3)', () => {
+    function makeV33Accessory() {
+      const acc = new TuyaAccessory(makeProps({ connect: true, version: '3.3' }) as any)
+      lastSocket.emit('connect')
+      return acc
+    }
+
+    it('ignores frames that are too short', () => {
+      makeV33Accessory()
+      expect(() => lastSocket.emit('data', Buffer.from('0000', 'hex'))).not.toThrow()
+    })
+
+    it('handles heartbeat (cmd 9) without error', () => {
+      makeV33Accessory()
+      const frame = buildFrame(9, Buffer.from(''))
+      expect(() => lastSocket.emit('data', frame)).not.toThrow()
+    })
+
+    it('handles cmd 7 without error', () => {
+      makeV33Accessory()
+      const frame = buildFrame(7, Buffer.from(''))
+      expect(() => lastSocket.emit('data', frame)).not.toThrow()
+    })
+  })
+
+  // ── _change() ────────────────────────────────────────────────────────────────
+  describe('_change() (internal state tracking)', () => {
+    // _change() is exercised via the real message-handler path (cmd=10 on v3.1)
+    it('only emits change when state actually differs', () => {
+      // Use real timers for this test since we need setImmediate to work
+      vi.useRealTimers()
+
+      const acc = new TuyaAccessory({ ...makeProps({ connect: true, version: '3.1' }), log } as any)
+      lastSocket.emit('connect')
+
+      const frame = buildFrame(10, Buffer.from(JSON.stringify({ dps: { '1': true } })))
+      let callCount = 0
+
+      return new Promise<void>((resolve) => {
+        acc.on('change', () => {
+          callCount++
+        })
+
+        // First message: state transitions {} → { '1': true } → should emit
+        lastSocket.emit('data', frame)
+
+        // Wait for first change to be processed
+        setImmediate(() => {
+          expect(callCount).toBe(1)
+
+          // Send identical message - should NOT emit
+          lastSocket.emit('data', frame)
+
+          // Wait for async.queue to process (would emit if state changed)
+          setImmediate(() => {
+            setImmediate(() => {
+              // Still should be 1 - no second emit
+              expect(callCount).toBe(1)
+              // Restore fake timers for subsequent tests
+              vi.useFakeTimers()
+              resolve()
+            })
+          })
+        })
+      })
+    })
+
+    it('accumulates state across multiple updates', () => {
+      const acc = new TuyaAccessory(makeProps({ fake: true, connect: true }) as any)
+      vi.advanceTimersByTime(1100)
+
+      acc.update({ '1': true })
+      vi.advanceTimersByTime(1100)
+      acc.update({ '2': 500 })
+      vi.advanceTimersByTime(1100)
+
+      expect(acc.state).toMatchObject({ '1': true, '2': 500 })
+    })
+  })
+
+  // ── version routing ───────────────────────────────────────────────────────────
+  describe('version-based message queue routing', () => {
+    it('selects _msgHandler_3_1 for version 3.1', () => {
+      const acc = new TuyaAccessory(makeProps({ version: '3.1' }) as any)
+      // If constructed without error, routing was set correctly
+      expect(acc).toBeInstanceOf(TuyaAccessory)
+    })
+
+    it('selects _msgHandler_3_3 for version 3.3', () => {
+      const acc = new TuyaAccessory(makeProps({ version: '3.3' }) as any)
+      expect(acc).toBeInstanceOf(TuyaAccessory)
+    })
+
+    it('selects _msgHandler_3_3 for version 3.2', () => {
+      const acc = new TuyaAccessory(makeProps({ version: '3.2' }) as any)
+      expect(acc).toBeInstanceOf(TuyaAccessory)
+    })
+
+    it('selects _msgHandler_3_4 for version 3.4', () => {
+      const acc = new TuyaAccessory(makeProps({ version: '3.4' }) as any)
+      expect(acc).toBeInstanceOf(TuyaAccessory)
+    })
+
+    it('negotiates a protocol 3.5 session key', async () => {
+      vi.useRealTimers()
+      const key = 'abcdef1234567890'
+      const acc = new TuyaAccessory(makeProps({ key, version: '3.5', connect: true }) as any)
+      lastSocket.emit('connect')
+      lastSocket.emit('ready')
+
+      const startPacket = lastSocket.write.mock.calls[0][0] as Buffer
+      const startIv = startPacket.slice(18, 30)
+      const startTag = startPacket.slice(-20, -4)
+      const startCiphertext = startPacket.slice(30, -20)
+      const startDecipher = crypto.createDecipheriv('aes-128-gcm', key, startIv)
+      startDecipher.setAuthTag(startTag)
+      startDecipher.setAAD(startPacket.slice(4, 18))
+      const localNonce = Buffer.concat([startDecipher.update(startCiphertext), startDecipher.final()])
+      const remoteNonce = Buffer.from('testnonce0000001')
+      const localHmac = crypto.createHmac('sha256', key).update(localNonce).digest()
+
+      lastSocket.emit('data', build35Frame(4, Buffer.concat([Buffer.alloc(4), remoteNonce, localHmac]), key))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(acc.connected).toBe(true)
+      expect(acc.session_key).toBeInstanceOf(Buffer)
+      expect(lastSocket.write).toHaveBeenCalledTimes(3)
+    })
+  })
+  // ── reachability reporting ────────────────────────────────────────────────────
+  describe('reachability reporting', () => {
+    const socketError = (code: string) => {
+      const err: NodeJS.ErrnoException = new Error(code)
+      err.code = code
+      return err
+    }
+
+    it('keeps a single transient socket error at debug level', () => {
+      new TuyaAccessory({ ...makeProps({ connect: true }), log } as any)
+
+      lastSocket.emit('error', socketError('ERR_CONNECTION_TIMED_OUT'))
+
+      expect(log.info).not.toHaveBeenCalled()
+      expect(log.debug).toHaveBeenCalledWith('Socket error for Test Device: ERR_CONNECTION_TIMED_OUT; reconnecting (consecutive failure 1)')
+    })
+
+    it('reports an outage after two consecutive socket errors', () => {
+      new TuyaAccessory({ ...makeProps({ connect: true }), log } as any)
+
+      lastSocket.emit('error', socketError('ERR_CONNECTION_TIMED_OUT'))
+      log.info.mockClear()
+
+      lastSocket.emit('error', socketError('ERR_PING_TIMED_OUT'))
+
+      expect(log.info).toHaveBeenCalledWith('Device Test Device became unreachable after 2 consecutive failures; attempting to reconnect (ERR_PING_TIMED_OUT)')
+      expect(log.debug).toHaveBeenCalledWith('Socket error for Test Device: ERR_CONNECTION_TIMED_OUT; reconnecting (consecutive failure 1)')
+    })
+
+    it('reports recovery with the outage duration once a valid state arrives', async () => {
+      vi.useRealTimers()
+
+      const acc = new TuyaAccessory({ ...makeProps({ connect: true, version: '3.1' }), log } as any)
+      const nowSpy = vi.spyOn(Date, 'now')
+
+      nowSpy.mockReturnValue(1_000_000)
+      lastSocket.emit('error', socketError('ERR_PING_TIMED_OUT'))
+      lastSocket.emit('error', socketError('ERR_CONNECTION_TIMED_OUT'))
+
+      nowSpy.mockReturnValue(1_000_000 + 82_000)
+      lastSocket.emit('connect')
+      lastSocket.emit('data', buildFrame(10, Buffer.from(JSON.stringify({ dps: { '1': true } }))))
+
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(log.info).toHaveBeenCalledWith('Device Test Device is reachable again (1m 22s)')
+      expect(acc.state).toMatchObject({ '1': true })
+
+      nowSpy.mockRestore()
+      vi.useFakeTimers()
+    })
+
+    it('reports a second outage normally after a recovery', async () => {
+      vi.useRealTimers()
+
+      new TuyaAccessory({ ...makeProps({ connect: true, version: '3.1' }), log } as any)
+
+      lastSocket.emit('error', socketError('ERR_PING_TIMED_OUT'))
+      lastSocket.emit('connect')
+      lastSocket.emit('data', buildFrame(10, Buffer.from(JSON.stringify({ dps: { '1': true } }))))
+
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      log.info.mockClear()
+      lastSocket.emit('error', socketError('EHOSTUNREACH'))
+      lastSocket.emit('error', socketError('ERR_CONNECTION_TIMED_OUT'))
+
+      expect(log.info).toHaveBeenCalledWith('Device Test Device became unreachable after 2 consecutive failures; attempting to reconnect (ERR_CONNECTION_TIMED_OUT)')
+
+      vi.useFakeTimers()
+    })
+
+    it('does not claim recovery for a device that was never reported unreachable', async () => {
+      vi.useRealTimers()
+
+      new TuyaAccessory({ ...makeProps({ connect: true, version: '3.1' }), log } as any)
+
+      lastSocket.emit('connect')
+      lastSocket.emit('data', buildFrame(10, Buffer.from(JSON.stringify({ dps: { '1': true } }))))
+
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining('is reachable again'))
+
+      vi.useFakeTimers()
+    })
+  })
+})

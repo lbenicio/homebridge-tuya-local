@@ -1,0 +1,7 @@
+# Default owner for all files
+* @lbenicio
+
+# Critical automation and release configuration
+/.github/workflows/* @lbenicio
+/package.json @lbenicio
+/config.schema.json @lbenicio

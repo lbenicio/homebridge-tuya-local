@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://docs.lbenicio.io/homebridge-tuya-local/sitemap.xml
