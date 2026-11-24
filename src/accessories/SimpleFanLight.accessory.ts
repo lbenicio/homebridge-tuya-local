@@ -71,7 +71,7 @@ class SimpleFanLightAccessory extends BaseAccessory {
             maxValue: 1000,
             minStep: 100,
           })
-          .updateValue(this.convertBrightnessFromTuyaToHomeKit(dps[this.dpBrightness]))
+          .updateValue(this._getBrightness(dps[this.dpBrightness]))
           .on('get', this.getBrightness.bind(this))
           .on('set', this.setBrightness.bind(this))
       }
