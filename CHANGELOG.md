@@ -1,3 +1,9 @@
+# 1.0.0 (2026-11-24)
+
+### Features
+
+- **project:** initialize homebridge-tuya-local plugin ([940db6e](https://github.com/lbenicio/homebridge-tuya-local/commit/940db6ed902fc0e973c4c23863eb58bc4b301dee))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
