@@ -53,6 +53,9 @@
     "vitepress": "^1.6.4",
     "vitest": "^5.1.1"
   },
+  "overrides": {
+    "vite": "^6.4.4"
+  },
   "simple-git-hooks": {
     "pre-commit": "npx lint-staged && npm run validate:quality",
     "pre-push": "npm run validate:quality"
