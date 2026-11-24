@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-24
+
+### Added
+
+- Added Matter exposure for supported Tuya LAN devices, including dimmers, tunable-white lights, multi-outlet and multi-switch devices, fans, fan lights, sensors, and wireless switches.
+- Added Matter gesture events for wireless switches and state updates for individual endpoints.
+
+### Changed
+
+- Improved Matter accessory restoration and lifecycle handling, including cleanup of stale cached accessories.
+- Log unsupported Matter device types while keeping those devices available in HomeKit.
+- Changed release automation to use manual dispatch and changelog-based release notes.
+- Pinned the Vite override to `^6.4.4`.
+
 ### Fixed
 
 - Corrected the package license metadata to match the GPLv3 license text.
+- Corrected Matter contact sensor state mapping.
 
 ## [2.0.1] - 2026-11-24
 

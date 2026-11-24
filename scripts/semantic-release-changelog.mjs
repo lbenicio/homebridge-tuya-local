@@ -5,12 +5,18 @@ const changelogPath = resolve('CHANGELOG.md')
 const packagePath = resolve('package.json')
 const lockfilePath = resolve('package-lock.json')
 
-function readUnreleasedSection() {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function readSection(sectionName, allowDatedHeader = false) {
   const lines = readFileSync(changelogPath, 'utf8').split(/\r?\n/)
-  const start = lines.findIndex((line) => /^## \[Unreleased\]\s*$/.test(line))
+  const suffix = allowDatedHeader ? '(?:\\s+-\\s+.*)?' : ''
+  const header = new RegExp(`^## \\[${escapeRegExp(sectionName)}\\]${suffix}\\s*$`)
+  const start = lines.findIndex((line) => header.test(line))
 
   if (start === -1) {
-    throw new Error('CHANGELOG.md must contain a "## [Unreleased]" section.')
+    return undefined
   }
 
   const nextSection = lines.findIndex((line, index) => index > start && /^## \[[^\]]+\]/.test(line))
@@ -19,26 +25,53 @@ function readUnreleasedSection() {
     .join('\n')
     .trim()
 
-  if (!notes) {
-    throw new Error('Add release notes under "## [Unreleased]" before publishing.')
-  }
-
   return { lines, start, nextSection, notes }
 }
 
-export async function generateNotes() {
-  return readUnreleasedSection().notes
+function readUnreleasedSection() {
+  const section = readSection('Unreleased')
+
+  if (!section) {
+    throw new Error('CHANGELOG.md must contain a "## [Unreleased]" section.')
+  }
+
+  if (!section.notes) {
+    throw new Error('Add release notes under "## [Unreleased]" before publishing.')
+  }
+
+  return section
+}
+
+function readReleaseSection(version) {
+  const section = readSection(version, true)
+
+  if (section && !section.notes) {
+    throw new Error(`Add release notes under "## [${version}]" before publishing.`)
+  }
+
+  return section
+}
+
+export async function generateNotes(_pluginConfig, { nextRelease }) {
+  return (readReleaseSection(nextRelease.version) || readUnreleasedSection()).notes
 }
 
 export async function prepare(_pluginConfig, { nextRelease }) {
-  const { lines, start, nextSection, notes } = readUnreleasedSection()
-  const preceding = lines
-    .slice(0, start + 1)
-    .join('\n')
-    .replace(/\s+$/, '')
-  const historical = nextSection === -1 ? '' : lines.slice(nextSection).join('\n').replace(/^\s+/, '')
-  const date = new Date().toISOString().slice(0, 10)
-  const promotedChangelog = [`${preceding}\n\n## [${nextRelease.version}] - ${date}\n\n${notes}`, historical].filter(Boolean).join('\n\n').replace(/\n*$/, '\n')
+  const existingRelease = readReleaseSection(nextRelease.version)
+  let promotedChangelog
+
+  if (existingRelease) {
+    promotedChangelog = readFileSync(changelogPath, 'utf8')
+  } else {
+    const { lines, start, nextSection, notes } = readUnreleasedSection()
+    const preceding = lines
+      .slice(0, start + 1)
+      .join('\n')
+      .replace(/\s+$/, '')
+    const historical = nextSection === -1 ? '' : lines.slice(nextSection).join('\n').replace(/^\s+/, '')
+    const date = new Date().toISOString().slice(0, 10)
+    promotedChangelog = [`${preceding}\n\n## [${nextRelease.version}] - ${date}\n\n${notes}`, historical].filter(Boolean).join('\n\n').replace(/\n*$/, '\n')
+  }
 
   const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'))
   const lockfile = JSON.parse(readFileSync(lockfilePath, 'utf8'))
