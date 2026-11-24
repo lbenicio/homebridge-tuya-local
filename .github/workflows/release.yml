@@ -1,6 +1,8 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -31,9 +33,8 @@ jobs:
       - run: npm ci
       - run: npm run build:tsc
 
-      # @semantic-release/npm uses the npm CLI pinned in package-lock.json for OIDC publishing.
-      # No NPM_TOKEN. Publishing authenticates via OIDC against the trusted
-      # publisher configured for this package on npmjs.com, matching @lbenicio/ui.
+      # No NPM_TOKEN is needed. npm authenticates this publish through OIDC;
+      # the npm Trusted Publisher must match this repository and workflow.
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
