@@ -13,13 +13,11 @@
   <br />
 
 [![CI](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/unit-tests.yml/badge.svg)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/unit-tests.yml)
-[![GitHub release](https://img.shields.io/github/v/release/lbenicio/homebridge-tuya-local)](https://github.com/lbenicio/homebridge-tuya-local/releases)
 [![npm version](https://img.shields.io/npm/v/@lbenicio/homebridge-tuya-local)](https://www.npmjs.com/package/@lbenicio/homebridge-tuya-local)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/lbenicio/homebridge-tuya-local/badges/coverage.json)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D26.0.0-339933)](https://www.npmjs.com/package/@lbenicio/homebridge-tuya-local)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/lbenicio/homebridge-tuya-local/badges/coverage.json)](https://github.com/lbenicio/homebridge-tuya-local/actions/workflows/unit-tests.yml)
 [![Homebridge](https://img.shields.io/badge/homebridge-%3E%3D1.6.0-blue)](https://homebridge.io)
 [![license](https://img.shields.io/npm/l/@lbenicio/homebridge-tuya-local)](LICENSE)
-[![Docs](https://img.shields.io/website?url=https%3A%2F%2Fdocs.lbenicio.io%2Fhomebridge-tuya-local%2F&label=docs)](https://docs.lbenicio.io/homebridge-tuya-local/)
 
 </div>
 
